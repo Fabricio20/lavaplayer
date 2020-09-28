@@ -7,12 +7,6 @@ import com.sedmelluq.discord.lavaplayer.tools.Units;
 import com.sedmelluq.discord.lavaplayer.tools.io.HttpClientTools;
 import com.sedmelluq.discord.lavaplayer.tools.io.HttpInterface;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrackInfo;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.utils.URLEncodedUtils;
@@ -24,12 +18,17 @@ import org.jsoup.parser.Parser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+
 import static com.sedmelluq.discord.lavaplayer.tools.DataFormatTools.convertToMapLayout;
 import static com.sedmelluq.discord.lavaplayer.tools.FriendlyException.Severity.COMMON;
 import static com.sedmelluq.discord.lavaplayer.tools.FriendlyException.Severity.SUSPICIOUS;
-import static com.sedmelluq.discord.lavaplayer.tools.Units.CONTENT_LENGTH_UNKNOWN;
-import static com.sedmelluq.discord.lavaplayer.tools.Units.DURATION_MS_UNKNOWN;
-import static com.sedmelluq.discord.lavaplayer.tools.Units.DURATION_SEC_UNKNOWN;
+import static com.sedmelluq.discord.lavaplayer.tools.Units.*;
 
 public class DefaultYoutubeTrackDetails implements YoutubeTrackDetails {
   private static final Logger log = LoggerFactory.getLogger(DefaultYoutubeTrackDetails.class);
@@ -78,20 +77,26 @@ public class DefaultYoutubeTrackDetails implements YoutubeTrackDetails {
       return loadTrackFormatsFromAdaptive(adaptiveFormats);
     }
 
-    String playerResponse = args.get("player_response").text();
-
-    if (playerResponse != null) {
+    JsonBrowser streamingData;
+    boolean isLive;
+    if (args.isNull()) {
+      // New format
+      streamingData = info.get("streamingData");
+      isLive = info.get("videoDetails").get("isLive").asBoolean(false);
+    } else {
+      // Old format
+      String playerResponse = args.get("player_response").text();
       JsonBrowser playerData = JsonBrowser.parse(playerResponse);
-      JsonBrowser streamingData = playerData.get("streamingData");
-      boolean isLive = playerData.get("videoDetails").get("isLive").asBoolean(false);
+      streamingData = playerData.get("streamingData");
+      isLive = playerData.get("videoDetails").get("isLive").asBoolean(false);
+    }
 
-      if (!streamingData.isNull()) {
-        List<YoutubeTrackFormat> formats = loadTrackFormatsFromStreamingData(streamingData.get("formats"), isLive);
-        formats.addAll(loadTrackFormatsFromStreamingData(streamingData.get("adaptiveFormats"), isLive));
+    if (!streamingData.isNull()) {
+      List<YoutubeTrackFormat> formats = loadTrackFormatsFromStreamingData(streamingData.get("formats"), isLive);
+      formats.addAll(loadTrackFormatsFromStreamingData(streamingData.get("adaptiveFormats"), isLive));
 
-        if (!formats.isEmpty()) {
-          return formats;
-        }
+      if (!formats.isEmpty()) {
+        return formats;
       }
     }
 
@@ -286,10 +291,13 @@ public class DefaultYoutubeTrackDetails implements YoutubeTrackDetails {
       return null;
     }
 
+    JsonBrowser playerResponse;
     JsonBrowser args = info.get("args");
-    boolean useOldFormat = args.get("player_response").isNull();
-
-    if (useOldFormat) {
+    if (args.isNull()) {
+      // New format
+      playerResponse = info;
+    } else if (args.get("player_response").isNull()) {
+      // Older format
       if ("fail".equals(args.get("status").text())) {
         throw new FriendlyException(args.get("reason").text(), COMMON, null);
       }
@@ -297,9 +305,10 @@ public class DefaultYoutubeTrackDetails implements YoutubeTrackDetails {
       boolean isStream = "1".equals(args.get("live_playback").text());
       long duration = extractDurationSeconds(isStream, args, "length_seconds");
       return buildTrackInfo(videoId, args.get("title").text(), args.get("author").text(), isStream, duration);
+    } else {
+      // Old format
+      playerResponse = JsonBrowser.parse(args.get("player_response").text());
     }
-
-    JsonBrowser playerResponse = JsonBrowser.parse(args.get("player_response").text());
     JsonBrowser playabilityStatus = playerResponse.get("playabilityStatus");
 
     if ("ERROR".equals(playabilityStatus.get("status").text())) {
